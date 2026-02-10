@@ -4,9 +4,9 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use crossterm::{
-    cursor::MoveTo,
+    cursor::{self, MoveTo},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
+    execute, queue,
     style::{Attribute, Color, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{
         self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
@@ -89,13 +89,8 @@ impl Editor {
             self.col = 0;
             return;
         }
-        if self.row >= nlines {
-            self.row = nlines - 1;
-        }
-        let len = self.line().len();
-        if self.col > len {
-            self.col = len;
-        }
+        self.row = self.row.min(nlines - 1);
+        self.col = self.col.min(self.line().len());
     }
 
     fn save_memo(&mut self) {
@@ -131,36 +126,23 @@ impl Editor {
 
         self.ensure_cursor_visible(content_h);
 
-        execute!(stdout, Clear(ClearType::All))?;
+        queue!(stdout, cursor::Hide, Clear(ClearType::All))?;
 
         // ── Tab bar (row 0) ──
-        execute!(stdout, MoveTo(0, 0))?;
+        queue!(stdout, MoveTo(0, 0))?;
         for i in 0..self.steps.len() {
             if i == self.si {
-                execute!(
-                    stdout,
-                    SetBackgroundColor(Color::Cyan),
-                    SetForegroundColor(Color::Black),
-                    SetAttribute(Attribute::Bold)
-                )?;
+                queue!(stdout, SetBackgroundColor(Color::Cyan), SetForegroundColor(Color::Black), SetAttribute(Attribute::Bold))?;
             } else {
-                execute!(
-                    stdout,
-                    SetBackgroundColor(Color::DarkGrey),
-                    SetForegroundColor(Color::White)
-                )?;
+                queue!(stdout, SetBackgroundColor(Color::DarkGrey), SetForegroundColor(Color::White))?;
             }
-            let label = format!(" {} ", i + 1);
-            write!(stdout, "{}", label)?;
-            execute!(stdout, ResetColor)?;
+            write!(stdout, " {} ", i + 1)?;
+            queue!(stdout, ResetColor)?;
             write!(stdout, " ")?;
         }
-        // right-align filename
-        let tabs_width = self.steps.len() * 4; // " N " + " " per tab
-        let fname = &self.filename;
-        if tabs_width + fname.len() < tw {
-            let pad = tw - tabs_width - fname.len();
-            write!(stdout, "{:>width$}", fname, width = pad + fname.len())?;
+        let tabs_width = self.steps.len() * 4;
+        if tabs_width + self.filename.len() < tw {
+            write!(stdout, "{:>width$}", self.filename, width = tw - tabs_width)?;
         }
 
         // ── Content area ──
@@ -170,27 +152,24 @@ impl Editor {
 
         for vrow in 0..content_h {
             let abs_row = self.scroll + vrow;
-            let screen_y = (vrow + 1) as u16; // +1 for tab bar
-            execute!(stdout, MoveTo(0, screen_y))?;
+            let screen_y = (vrow + 1) as u16;
+            queue!(stdout, MoveTo(0, screen_y))?;
 
             if abs_row >= step.len() {
-                // empty line beyond content
-                execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+                queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
                 write!(stdout, "~")?;
-                execute!(stdout, ResetColor)?;
+                queue!(stdout, ResetColor)?;
                 continue;
             }
 
             let line = &step[abs_row];
             let color = if abs_row == 0 { Color::Green } else { Color::White };
-            execute!(stdout, SetForegroundColor(color))?;
+            queue!(stdout, SetForegroundColor(color))?;
 
-            // Render line content (no cloning, just iterate chars)
             let display: String = line.chars().take(tw).collect();
             write!(stdout, "{}", display)?;
-            execute!(stdout, ResetColor)?;
+            queue!(stdout, ResetColor)?;
 
-            // Track cursor position
             if abs_row == self.row {
                 cursor_screen_row = screen_y;
                 cursor_screen_col = self.col.min(tw.saturating_sub(1)) as u16;
@@ -199,40 +178,23 @@ impl Editor {
 
         // ── Status bar (last row) ──
         let status_y = (th - 1) as u16;
-        execute!(stdout, MoveTo(0, status_y))?;
+        queue!(stdout, MoveTo(0, status_y))?;
 
         let (bg, fg) = match &self.msg {
             Some((_, MsgKind::Error)) => (Color::Red, Color::White),
             Some((_, MsgKind::Warn)) => (Color::Yellow, Color::Black),
             _ => (Color::Green, Color::Black),
         };
-        execute!(
-            stdout,
-            SetBackgroundColor(bg),
-            SetForegroundColor(fg)
-        )?;
+        queue!(stdout, SetBackgroundColor(bg), SetForegroundColor(fg))?;
 
         let dirty_ch = if self.dirty { '*' } else { ' ' };
         let nsteps = self.steps.len();
         let ln = self.row + 1;
 
-        let left = if let Some((ref text, _)) = self.msg {
-            format!(
-                "{}Step {}/{} Ln {} | {}",
-                dirty_ch,
-                self.si + 1,
-                nsteps,
-                ln,
-                text
-            )
-        } else {
-            format!(
-                "{}Step {}/{} Ln {} | ^N/^P:Step ^L:Clear ^S:Save ^Q:Quit",
-                dirty_ch,
-                self.si + 1,
-                nsteps,
-                ln,
-            )
+        let info = format!("{}Step {}/{} Ln {}", dirty_ch, self.si + 1, nsteps, ln);
+        let left = match &self.msg {
+            Some((text, _)) => format!("{} | {}", info, text),
+            None => format!("{} | ^N/^P:Step ^L:Clear ^S:Save ^Q:Quit", info),
         };
 
         let display: String = if left.len() < tw {
@@ -241,10 +203,9 @@ impl Editor {
             left.chars().take(tw).collect()
         };
         write!(stdout, "{}", display)?;
-        execute!(stdout, ResetColor)?;
+        queue!(stdout, ResetColor)?;
 
-        // Position cursor
-        execute!(stdout, MoveTo(cursor_screen_col, cursor_screen_row))?;
+        queue!(stdout, MoveTo(cursor_screen_col, cursor_screen_row), cursor::Show)?;
 
         stdout.flush()?;
         Ok(())
@@ -267,89 +228,34 @@ impl Editor {
         }
 
         match key.code {
-            // ── Ctrl combinations ──
-            KeyCode::Char('c') if ctrl => {
-                self.running = false;
-            }
+            KeyCode::Char('c') if ctrl => self.running = false,
             KeyCode::Char('q') if ctrl => {
-                if !self.dirty {
-                    self.running = false;
-                } else if self.quit_confirm {
+                if !self.dirty || self.quit_confirm {
                     self.running = false;
                 } else {
                     self.quit_confirm = true;
                     self.set_msg("Unsaved! ^Q again to discard", MsgKind::Warn);
                 }
             }
-            KeyCode::Char('s') if ctrl => {
-                self.save();
-            }
-            KeyCode::Char('n') if ctrl => {
-                self.next_step();
-            }
-            KeyCode::Char('p') if ctrl => {
-                self.prev_step();
-            }
-            KeyCode::Char('a') if ctrl => {
-                self.col = 0;
-            }
-            KeyCode::Char('e') if ctrl => {
-                self.col = self.line().len();
-            }
-            KeyCode::Char('l') if ctrl => {
-                self.clear_step();
-            }
-
-            // ── Step switching ──
-            KeyCode::PageDown => {
-                self.next_step();
-            }
-            KeyCode::PageUp => {
-                self.prev_step();
-            }
-
-            KeyCode::Tab => {
-                self.insert_char('\t');
-            }
-
-            // ── Navigation ──
-            KeyCode::Left => {
-                if self.col > 0 {
-                    self.col -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if self.col < self.line().len() {
-                    self.col += 1;
-                }
-            }
-            KeyCode::Up => {
-                self.move_up();
-            }
-            KeyCode::Down => {
-                self.move_down();
-            }
-            KeyCode::Home => {
-                self.col = 0;
-            }
-            KeyCode::End => {
-                self.col = self.line().len();
-            }
-
-            // ── Editing ──
-            KeyCode::Enter => {
-                self.insert_newline();
-            }
-            KeyCode::Backspace => {
-                self.handle_backspace();
-            }
-            KeyCode::Delete => {
-                self.handle_delete();
-            }
-            KeyCode::Char(c) if !ctrl && (c as u32 >= 32 && c as u32 <= 126) => {
-                self.insert_char(c);
-            }
-
+            KeyCode::Char('s') if ctrl => self.save(),
+            KeyCode::Char('n') if ctrl => self.next_step(),
+            KeyCode::Char('p') if ctrl => self.prev_step(),
+            KeyCode::Char('a') if ctrl => self.col = 0,
+            KeyCode::Char('e') if ctrl => self.col = self.line().len(),
+            KeyCode::Char('l') if ctrl => self.clear_step(),
+            KeyCode::PageDown => self.next_step(),
+            KeyCode::PageUp => self.prev_step(),
+            KeyCode::Tab => self.insert_char('\t'),
+            KeyCode::Left => { if self.col > 0 { self.col -= 1; } }
+            KeyCode::Right => { if self.col < self.line().len() { self.col += 1; } }
+            KeyCode::Up => self.move_up(),
+            KeyCode::Down => self.move_down(),
+            KeyCode::Home => self.col = 0,
+            KeyCode::End => self.col = self.line().len(),
+            KeyCode::Enter => self.insert_newline(),
+            KeyCode::Backspace => self.handle_backspace(),
+            KeyCode::Delete => self.handle_delete(),
+            KeyCode::Char(c) if !ctrl && !c.is_control() => self.insert_char(c),
             _ => {}
         }
     }
@@ -365,17 +271,9 @@ impl Editor {
         self.restore_memo();
     }
 
-    fn next_step(&mut self) {
-        if self.si + 1 < self.steps.len() {
-            self.switch_step(self.si + 1);
-        }
-    }
+    fn next_step(&mut self) { self.switch_step(self.si + 1); }
 
-    fn prev_step(&mut self) {
-        if self.si > 0 {
-            self.switch_step(self.si - 1);
-        }
-    }
+    fn prev_step(&mut self) { self.switch_step(self.si.saturating_sub(1)); }
 
     // ── cursor movement ──────────────────────────────────────
 
@@ -487,8 +385,10 @@ impl Editor {
         while self.running {
             self.draw(stdout)?;
 
-            if let Event::Key(key) = event::read()? {
-                self.handle_key(key);
+            match event::read()? {
+                Event::Key(key) => self.handle_key(key),
+                Event::Resize(_, _) => continue,
+                _ => {}
             }
 
             while event::poll(Duration::ZERO)? {

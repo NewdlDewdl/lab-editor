@@ -41,8 +41,8 @@ fn parse_steps(content: &str, old_format: bool) -> Vec<Step> {
             if line == "$" {
                 continue;
             }
-            if line.starts_with("$ ") {
-                current.push(line[2..].to_string());
+            if let Some(cmd) = line.strip_prefix("$ ") {
+                current.push(cmd.to_string());
                 continue;
             }
         }
