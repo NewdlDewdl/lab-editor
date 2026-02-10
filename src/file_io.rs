@@ -3,16 +3,6 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// Load a lab submission file, returning a list of steps.
-///
-/// Supports three formats:
-/// 1. **New format (no blank lines)**: Sequential step number detection.
-///    Step boundaries detected by matching the next expected step number.
-/// 2. **Old format ($ prefix)**: Lines starting with `$ ` are commands.
-///    Entries are flattened into a single Vec<String> per step.
-/// 3. **Legacy format (blank line separated)**: Step blocks with step numbers.
-///
-/// Returns a single empty step if the file is empty or cannot be read.
 pub fn load_file(path: &Path) -> Vec<Step> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
@@ -23,112 +13,45 @@ pub fn load_file(path: &Path) -> Vec<Step> {
         return vec![new_step()];
     }
 
-    // Detect old format: any line starts with "$ "
-    let is_old_format = content.lines().any(|l| l.starts_with("$ "));
-
-    if is_old_format {
-        load_old_format(&content)
-    } else {
-        load_new_format(&content)
-    }
+    let old_format = content.lines().any(|l| l.starts_with("$ "));
+    parse_steps(&content, old_format)
 }
 
-/// Parse the new format (no blank lines).
-///
-/// Sequential step number detection: track next_expected = 1, 2, 3, ...
-/// When a line equals next_expected.to_string() (trimmed), start a new step.
-/// This is robust against output containing bare numbers since we only match
-/// the NEXT expected number.
-///
-/// Blank lines are skipped for backward compatibility with legacy format.
-fn load_new_format(content: &str) -> Vec<Step> {
+fn parse_steps(content: &str, old_format: bool) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
-    let mut current_step: Step = Vec::new();
-    let mut next_expected = 1;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        // Skip blank lines (for legacy format compatibility)
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        // Check if this line is the next expected step number
-        if trimmed == next_expected.to_string() {
-            // Flush the current step if it has content
-            if !current_step.is_empty() {
-                steps.push(current_step.clone());
-                current_step.clear();
-            }
-            next_expected += 1;
-            continue;
-        }
-
-        // Not a step number - add to current step
-        current_step.push(line.to_string());
-    }
-
-    // Flush the last step
-    if !current_step.is_empty() {
-        steps.push(current_step);
-    }
-
-    // If we found step markers but no content, or if the file started with step 1
-    // but had no other content, handle the edge case
-    if steps.is_empty() {
-        vec![new_step()]
-    } else {
-        steps
-    }
-}
-
-/// Parse the old `$ ` prefixed format.
-///
-/// Uses sequential step number detection (same as new format).
-/// `$ cmd` lines store just `cmd` (strip `$ `).
-/// Bare `$` lines and blank lines are skipped.
-fn load_old_format(content: &str) -> Vec<Step> {
-    let mut steps: Vec<Step> = Vec::new();
-    let mut current_step: Step = Vec::new();
+    let mut current: Step = Vec::new();
     let mut next_expected: u32 = 1;
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // Skip blank lines entirely
         if trimmed.is_empty() {
             continue;
         }
 
-        // Check if this is the next expected step number
         if trimmed == next_expected.to_string() {
-            if !current_step.is_empty() {
-                steps.push(current_step.clone());
-                current_step.clear();
+            if !current.is_empty() {
+                steps.push(std::mem::take(&mut current));
             }
             next_expected += 1;
             continue;
         }
 
-        // Bare "$" - drop it
-        if line == "$" {
-            continue;
+        if old_format {
+            if line == "$" {
+                continue;
+            }
+            if line.starts_with("$ ") {
+                current.push(line[2..].to_string());
+                continue;
+            }
         }
 
-        // "$ cmd" - store just the command (strip "$ ")
-        if line.starts_with("$ ") {
-            current_step.push(line[2..].to_string());
-            continue;
-        }
-
-        // Regular output line
-        current_step.push(line.to_string());
+        current.push(line.to_string());
     }
 
-    // Flush remaining
-    if !current_step.is_empty() {
-        steps.push(current_step);
+    if !current.is_empty() {
+        steps.push(current);
     }
 
     if steps.is_empty() {
@@ -138,20 +61,6 @@ fn load_old_format(content: &str) -> Vec<Step> {
     }
 }
 
-/// Save steps to a lab submission file in the clean format.
-///
-/// Format: ZERO blank lines. Step number on its own line, then content lines,
-/// then next step number. File ends with exactly one newline.
-///
-/// Example:
-/// ```
-/// 1
-/// {giant:~} echo hello
-/// hello
-/// 2
-/// {giant:~} ls
-/// file.txt
-/// ```
 pub fn save_file(path: &Path, steps: &[Step]) -> io::Result<()> {
     let mut output = String::new();
 
@@ -167,7 +76,6 @@ pub fn save_file(path: &Path, steps: &[Step]) -> io::Result<()> {
         }
     }
 
-    // Strip trailing blank lines, then ensure exactly one trailing newline
     let trimmed = output.trim_end_matches('\n');
     let final_output = if trimmed.is_empty() {
         String::from("\n")
@@ -177,7 +85,6 @@ pub fn save_file(path: &Path, steps: &[Step]) -> io::Result<()> {
 
     let mut file = fs::File::create(path)?;
     file.write_all(final_output.as_bytes())?;
-    file.flush()?;
     file.sync_all()?;
     Ok(())
 }

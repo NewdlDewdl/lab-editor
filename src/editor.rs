@@ -1,6 +1,5 @@
 use crate::model::*;
 
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -25,7 +24,7 @@ pub struct Editor {
     pub filename: String,
     path: std::path::PathBuf,
     pub steps: Vec<Step>,
-    memo: Vec<HashMap<&'static str, usize>>,
+    memo: Vec<(usize, usize, usize)>,
     si: usize,
     row: usize,
     col: usize,
@@ -44,7 +43,7 @@ impl Editor {
             filename,
             path,
             steps,
-            memo: (0..n).map(|_| HashMap::new()).collect(),
+            memo: vec![(0, 0, 0); n],
             si: 0,
             row: 0,
             col: 0,
@@ -100,17 +99,14 @@ impl Editor {
     }
 
     fn save_memo(&mut self) {
-        let m = &mut self.memo[self.si];
-        m.insert("row", self.row);
-        m.insert("col", self.col);
-        m.insert("scroll", self.scroll);
+        self.memo[self.si] = (self.row, self.col, self.scroll);
     }
 
     fn restore_memo(&mut self) {
-        let m = &self.memo[self.si];
-        self.row = m.get("row").copied().unwrap_or(0);
-        self.col = m.get("col").copied().unwrap_or(0);
-        self.scroll = m.get("scroll").copied().unwrap_or(0);
+        let (row, col, scroll) = self.memo[self.si];
+        self.row = row;
+        self.col = col;
+        self.scroll = scroll;
         self.clamp_cursor();
     }
 
@@ -139,7 +135,7 @@ impl Editor {
 
         // ── Tab bar (row 0) ──
         execute!(stdout, MoveTo(0, 0))?;
-        for (i, _) in self.steps.iter().enumerate() {
+        for i in 0..self.steps.len() {
             if i == self.si {
                 execute!(
                     stdout,
@@ -186,14 +182,8 @@ impl Editor {
             }
 
             let line = &step[abs_row];
-            let is_first_line = abs_row == 0;
-
-            // Set color: first line green, rest white
-            if is_first_line {
-                execute!(stdout, SetForegroundColor(Color::Green))?;
-            } else {
-                execute!(stdout, SetForegroundColor(Color::White))?;
-            }
+            let color = if abs_row == 0 { Color::Green } else { Color::White };
+            execute!(stdout, SetForegroundColor(color))?;
 
             // Render line content (no cloning, just iterate chars)
             let display: String = line.chars().take(tw).collect();
@@ -318,9 +308,8 @@ impl Editor {
                 self.prev_step();
             }
 
-            // ── Tab key inserts literal tab ──
             KeyCode::Tab => {
-                self.insert_tab();
+                self.insert_char('\t');
             }
 
             // ── Navigation ──
@@ -413,10 +402,6 @@ impl Editor {
         self.mark_dirty();
     }
 
-    fn insert_tab(&mut self) {
-        self.insert_char('\t');
-    }
-
     fn insert_newline(&mut self) {
         let col = self.col;
         let rest = self.line_mut().split_off(col);
@@ -502,17 +487,13 @@ impl Editor {
         while self.running {
             self.draw(stdout)?;
 
-            match event::read()? {
-                Event::Key(key) => self.handle_key(key),
-                Event::Resize(_, _) => {} // redraw on next iteration
-                _ => {}
+            if let Event::Key(key) = event::read()? {
+                self.handle_key(key);
             }
 
-            // paste batching: drain all queued events before redrawing
             while event::poll(Duration::ZERO)? {
-                match event::read()? {
-                    Event::Key(key) => self.handle_key(key),
-                    _ => {}
+                if let Event::Key(key) = event::read()? {
+                    self.handle_key(key);
                 }
                 if !self.running {
                     break;
