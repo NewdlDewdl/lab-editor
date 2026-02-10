@@ -6,10 +6,14 @@ Terminal editor for assembling university lab submission files.
 
 ### macOS
 
-1. Download `Lab-Editor.dmg` from [Releases](https://github.com/NewdlDewdl/lab-editor/releases)
-2. Open the DMG
-3. Double-click `install.command`
-   - If macOS blocks it: right-click > Open
+```
+curl -fsSL https://raw.githubusercontent.com/NewdlDewdl/lab-editor/main/install.sh | bash
+```
+
+Or download `Lab-Editor.dmg` from [Releases](https://github.com/NewdlDewdl/lab-editor/releases) and copy the binary manually:
+```
+sudo cp "/Volumes/Lab Editor/lab-editor" /usr/local/bin/
+```
 
 ### Windows
 
