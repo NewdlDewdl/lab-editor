@@ -163,8 +163,7 @@ impl Editor {
             }
 
             let line = &step[abs_row];
-            let color = if abs_row == 0 { Color::Green } else { Color::White };
-            queue!(stdout, SetForegroundColor(color))?;
+            queue!(stdout, SetForegroundColor(Color::White))?;
 
             let display: String = line.chars().take(tw).collect();
             write!(stdout, "{}", display)?;
