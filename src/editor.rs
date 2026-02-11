@@ -130,19 +130,29 @@ impl Editor {
 
         // ── Tab bar (row 0) ──
         queue!(stdout, MoveTo(0, 0))?;
+        let mut tabs_width: usize = 0;
         for i in 0..self.steps.len() {
             if i == self.si {
                 queue!(stdout, SetBackgroundColor(Color::Cyan), SetForegroundColor(Color::Black), SetAttribute(Attribute::Bold))?;
             } else {
                 queue!(stdout, SetBackgroundColor(Color::DarkGrey), SetForegroundColor(Color::White))?;
             }
-            write!(stdout, " {} ", i + 1)?;
+            let label = format!(" {} ", i + 1);
+            write!(stdout, "{}", label)?;
+            tabs_width += label.len();
             queue!(stdout, ResetColor)?;
             write!(stdout, " ")?;
+            tabs_width += 1;
         }
-        let tabs_width = self.steps.len() * 4;
-        if tabs_width + self.filename.len() < tw {
-            write!(stdout, "{:>width$}", self.filename, width = tw - tabs_width)?;
+        // Right-align filename, leaving a 1-column margin to prevent terminal wrapping
+        if !self.filename.is_empty() && tabs_width + 2 < tw {
+            let available = tw - tabs_width - 1;
+            let name = if self.filename.len() > available {
+                &self.filename[self.filename.len() - available..]
+            } else {
+                &self.filename[..]
+            };
+            write!(stdout, "{:>width$}", name, width = available)?;
         }
 
         // ── Content area ──
@@ -158,7 +168,7 @@ impl Editor {
             if abs_row >= step.len() {
                 queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
                 write!(stdout, "~")?;
-                queue!(stdout, ResetColor)?;
+                queue!(stdout, ResetColor, Clear(ClearType::UntilNewLine))?;
                 continue;
             }
 
@@ -167,7 +177,7 @@ impl Editor {
 
             let display: String = line.chars().take(tw).collect();
             write!(stdout, "{}", display)?;
-            queue!(stdout, ResetColor)?;
+            queue!(stdout, ResetColor, Clear(ClearType::UntilNewLine))?;
 
             if abs_row == self.row {
                 cursor_screen_row = screen_y;
