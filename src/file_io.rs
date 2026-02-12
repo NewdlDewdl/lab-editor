@@ -30,8 +30,10 @@ fn parse_steps(content: &str, old_format: bool) -> Vec<Step> {
         }
 
         if trimmed == next_expected.to_string() {
-            if !current.is_empty() {
-                steps.push(std::mem::take(&mut current));
+            // Always push the previous step — even if empty (except before first delimiter)
+            if next_expected > 1 || !current.is_empty() {
+                let step = if current.is_empty() { new_step() } else { std::mem::take(&mut current) };
+                steps.push(step);
             }
             next_expected += 1;
             continue;
@@ -52,6 +54,12 @@ fn parse_steps(content: &str, old_format: bool) -> Vec<Step> {
 
     if !current.is_empty() {
         steps.push(current);
+    }
+
+    // Pad for trailing empty steps (last delimiter had no content after it)
+    let expected_count = if next_expected > 1 { (next_expected - 1) as usize } else { 0 };
+    while steps.len() < expected_count {
+        steps.push(new_step());
     }
 
     if steps.is_empty() {
@@ -244,5 +252,56 @@ $\n";
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0][0], "man man");
         assert_eq!(steps[1][0], "man cat");
+    }
+
+    #[test]
+    fn load_preserves_empty_steps() {
+        // Steps 1-2 have content, steps 3-4 are empty
+        let f = tmp_file("1\nfirst\n2\nsecond\n3\n4\n");
+        let steps = load_file(f.path());
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[0], vec!["first"]);
+        assert_eq!(steps[1], vec!["second"]);
+        assert_eq!(steps[2], vec![String::new()]);
+        assert_eq!(steps[3], vec![String::new()]);
+    }
+
+    #[test]
+    fn load_preserves_many_trailing_empty_steps() {
+        // Reproduces the bug: 18 steps, only first 2 have content
+        let mut content = String::from("1\ncontent1\n2\ncontent2\n");
+        for i in 3..=18 {
+            content.push_str(&format!("{}\n", i));
+        }
+        let f = tmp_file(&content);
+        let steps = load_file(f.path());
+        assert_eq!(steps.len(), 18);
+        assert_eq!(steps[0], vec!["content1"]);
+        assert_eq!(steps[1], vec!["content2"]);
+        for i in 2..18 {
+            assert_eq!(steps[i], vec![String::new()], "step {} should be empty", i + 1);
+        }
+    }
+
+    #[test]
+    fn roundtrip_with_empty_steps() {
+        // Save 6 steps (2 with content, 4 empty), reload should get all 6
+        let steps = vec![
+            vec!["echo hi".to_string()],
+            vec!["ls".to_string()],
+            vec![String::new()],
+            vec![String::new()],
+            vec![String::new()],
+            vec![String::new()],
+        ];
+        let f = tempfile::NamedTempFile::new().unwrap();
+        save_file(f.path(), &steps).unwrap();
+        let loaded = load_file(f.path());
+        assert_eq!(loaded.len(), 6);
+        assert_eq!(loaded[0], vec!["echo hi"]);
+        assert_eq!(loaded[1], vec!["ls"]);
+        for i in 2..6 {
+            assert_eq!(loaded[i], vec![String::new()]);
+        }
     }
 }

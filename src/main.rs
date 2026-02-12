@@ -152,11 +152,16 @@ fn prompt_required(label: &str) -> u32 {
 fn run_editor(filename: &str, num_steps: usize) {
     let path = Path::new(filename);
 
-    let steps = if path.exists() {
+    let mut steps = if path.exists() {
         file_io::load_file(path)
     } else {
         model::make_steps(num_steps)
     };
+
+    // Pad to requested step count if file had fewer
+    while steps.len() < num_steps {
+        steps.push(model::new_step());
+    }
 
     let mut ed = editor::Editor::new(filename.to_string(), steps);
 
